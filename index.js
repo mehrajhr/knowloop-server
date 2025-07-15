@@ -21,6 +21,7 @@ async function run() {
 
     const db = client.db("knowloop");
     const usersCollection = db.collection("users");
+    const sessionsCollection = db.collection("studySessions");
 
     app.get("/users/:email", async (req, res) => {
       try {
@@ -66,6 +67,20 @@ async function run() {
       } catch (error) {
         console.error("Error saving user:", error);
         return res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.get("/sessions", async (req, res) => {
+      try {
+        const sessions = await sessionsCollection
+          .find()
+          .sort({ registrationStartDate: 1 }) // optional: sort by date ascending
+          .toArray();
+
+        res.send(sessions);
+      } catch (error) {
+        console.error("Error fetching sessions:", error);
+        res.status(500).json({ message: "Failed to fetch study sessions" });
       }
     });
 
