@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const { MongoClient } = require("mongodb");
+const { MongoClient, ObjectId } = require("mongodb");
 
 dotenv.config();
 const app = express();
@@ -22,7 +22,11 @@ async function run() {
     const db = client.db("knowloop");
     const usersCollection = db.collection("users");
     const sessionsCollection = db.collection("studySessions");
+    const bookedSessionsCollection = db.collection("bookedSessions");
 
+    // for useres
+
+    // get user 
     app.get("/users/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -39,6 +43,7 @@ async function run() {
       }
     });
 
+    // create user
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
@@ -70,10 +75,13 @@ async function run() {
       }
     });
 
+    // for sessions
+
+    // get all sessions which approved by admin
     app.get("/sessions", async (req, res) => {
       try {
         const sessions = await sessionsCollection
-          .find()
+          .find({ status: "approved" })
           .sort({ registrationStartDate: 1 }) // optional: sort by date ascending
           .toArray();
 
@@ -81,6 +89,113 @@ async function run() {
       } catch (error) {
         console.error("Error fetching sessions:", error);
         res.status(500).json({ message: "Failed to fetch study sessions" });
+      }
+    });
+
+    // get session by id for details
+    app.get("/sessions/:id", async (req, res) => {
+      try {
+        const sessionId = req.params.id;
+
+        // Validate ObjectId
+        if (!ObjectId.isValid(sessionId)) {
+          return res.status(400).json({ message: "Invalid session ID" });
+        }
+
+        const session = await sessionsCollection.findOne({
+          _id: new ObjectId(sessionId),
+        });
+
+        if (!session) {
+          return res.status(404).json({ message: "Study session not found" });
+        }
+
+        res.send(session);
+      } catch (error) {
+        console.error("Error fetching session by ID:", error);
+        res.status(500).json({ message: "Failed to fetch session" });
+      }
+    });
+
+    // create booked session
+    app.post("/booked-sessions", async (req, res) => {
+      try {
+        const bookedData = req.body;
+
+        const result = await bookedSessionsCollection.insertOne(bookedData);
+        res.send({ success: true, result });
+      } catch (error) {
+        console.error("Error booking session:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to book session" });
+      }
+    });
+
+    // get users booked session via email
+    app.get("/booked-sessions/user/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const query = { studentEmail: email };
+        const result = await bookedSessionsCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching user booked sessions:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    // check the user booked in specific session
+    app.get("/booked-sessions/check", async (req, res) => {
+      try {
+        const { email, sessionId } = req.query;
+
+        if (!email || !sessionId) {
+          return res
+            .status(400)
+            .json({ message: "Missing email or session ID" });
+        }
+
+        const alreadyBooked = await bookedSessionsCollection.findOne({
+          sessionId,
+          studentEmail: email,
+        });
+
+        res.send({ booked: !!alreadyBooked, ...alreadyBooked });
+      } catch (error) {
+        console.error("Booking check failed:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // if the user cancel booking then delete the data from this
+    app.delete("/booked-sessions", async (req, res) => {
+      try {
+        const { email, sessionId } = req.query;
+
+        if (!email || !sessionId) {
+          return res
+            .status(400)
+            .json({ message: "Missing email or session ID" });
+        }
+
+        const result = await bookedSessionsCollection.deleteOne({
+          sessionId,
+          studentEmail: email,
+          paymentStatus: { $ne: "paid" },
+        });
+
+        if (result.deletedCount > 0) {
+          res.send({ success: true, message: "Booking canceled" });
+        } else {
+          res.send({
+            success: false,
+            message: "No unpaid booking found to cancel",
+          });
+        }
+      } catch (error) {
+        console.error("Error canceling booking:", error);
+        res.status(500).json({ message: "Server error" });
       }
     });
 
