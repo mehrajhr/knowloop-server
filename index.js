@@ -26,7 +26,7 @@ async function run() {
 
     // for useres
 
-    // get user 
+    // get user
     app.get("/users/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -196,6 +196,62 @@ async function run() {
       } catch (error) {
         console.error("Error canceling booking:", error);
         res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // ✅ POST /sessions/review/:id (Add review & update rating)
+
+    app.post("/sessions/review/:id", async (req, res) => {
+      const sessionId = req.params.id;
+      const { studentName, reviewText, rating } = req.body;
+
+      try {
+        const session = await sessionsCollection.findOne({
+          _id: new ObjectId(sessionId),
+        });
+
+        if (!session) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Session not found" });
+        }
+
+        // Append the new review
+        const updatedReviews = [
+          ...(session.reviews || []),
+          { studentName, reviewText, rating },
+        ];
+
+        // Calculate new average rating
+        const totalRating = updatedReviews.reduce(
+          (sum, r) => sum + parseFloat(r.rating),
+          0
+        );
+        const averageRating = parseFloat(
+          (totalRating / updatedReviews.length).toFixed(1)
+        );
+
+        // Update in DB
+        const result = await sessionsCollection.updateOne(
+          { _id: new ObjectId(sessionId) },
+          {
+            $set: {
+              reviews: updatedReviews,
+              averageRating: averageRating,
+            },
+          }
+        );
+
+        res.json({
+          success: true,
+          message: "Review submitted",
+          updated: result.modifiedCount > 0,
+        });
+      } catch (error) {
+        console.error("Error submitting review:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
       }
     });
 
