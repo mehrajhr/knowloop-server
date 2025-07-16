@@ -23,6 +23,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const sessionsCollection = db.collection("studySessions");
     const bookedSessionsCollection = db.collection("bookedSessions");
+    const notesCollection = db.collection("notes");
 
     // for useres
 
@@ -252,6 +253,86 @@ async function run() {
         res
           .status(500)
           .json({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // for the notes
+
+    // get users notes
+
+    app.get("/notes/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        if (!email) return res.status(400).send({ error: "Email is required" });
+
+        const notes = await notesCollection.find({ email }).toArray();
+        res.send(notes);
+      } catch (err) {
+        res.status(500).send({ error: "Failed to fetch notes" });
+      }
+    });
+
+    // for update notes
+    app.patch("/notes/:id", async (req, res) => {
+      const { id } = req.params;
+      const updatedNote = req.body;
+
+      try {
+        const result = await notesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updatedNote }
+        );
+
+        if (result.modifiedCount > 0) {
+          res.send({ success: true, message: "Note updated successfully" });
+        } else {
+          res.send({
+            success: false,
+            message: "No changes made or note not found",
+          });
+        }
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Update failed", error });
+      }
+    });
+
+    // for delete notes
+
+    app.delete("/notes/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await notesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({ success: result.deletedCount > 0 });
+      } catch (err) {
+        res.status(500).send({ error: "Failed to delete note" });
+      }
+    });
+
+    // create the students notes
+    app.post("/notes", async (req, res) => {
+      try {
+        const { email, title, description } = req.body;
+        if (!email || !title || !description) {
+          return res
+            .status(400)
+            .send({ success: false, message: "All fields required" });
+        }
+
+        const result = await notesCollection.insertOne({
+          email,
+          title,
+          description,
+          createdAt: new Date().toISOString(),
+        });
+
+        res.send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        res.status(500).send({ success: false, message: "Server error" });
       }
     });
 
