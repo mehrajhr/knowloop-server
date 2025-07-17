@@ -24,6 +24,7 @@ async function run() {
     const sessionsCollection = db.collection("studySessions");
     const bookedSessionsCollection = db.collection("bookedSessions");
     const notesCollection = db.collection("notes");
+    const materialsCollection = db.collection("materials");
 
     // for useres
 
@@ -85,7 +86,8 @@ async function run() {
 
       if (email) {
         query.tutor_email = email;
-      } else if (status && status !== "all") {
+      }
+      if (status && status !== "all") {
         query.status = status;
       }
 
@@ -109,7 +111,6 @@ async function run() {
         res.status(500).json({ message: "Failed to fetch study sessions" });
       }
     });
-
 
     // get session by id for details
     app.get("/sessions/:id", async (req, res) => {
@@ -233,6 +234,63 @@ async function run() {
         { $set: { status: "rejected" } }
       );
       res.send({ success: result.modifiedCount > 0 });
+    });
+
+    // for materials
+
+    app.get("/materials", async (req, res) => {
+      const { tutor_email } = req.query;
+      try {
+        const query = tutor_email ? {tutorEmail: tutor_email } : {};
+        const materials = await materialsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(materials);
+      } catch (error) {
+        console.error("Error fetching materials:", error);
+        res.status(500).json({ message: "Failed to fetch materials" });
+      }
+    });
+
+    app.post("/materials", async (req, res) => {
+      try {
+        const material = req.body;
+        const result = await materialsCollection.insertOne(material);
+        res.send(result);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to upload material" });
+      }
+    });
+
+    // delete materilas
+    app.delete("/materials/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await materialsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error deleting material:", error);
+        res.status(500).json({ message: "Failed to delete material" });
+      }
+    });
+
+    // update materials
+    app.patch("/materials/:id", async (req, res) => {
+      const id = req.params.id;
+      const { title, link } = req.body;
+      try {
+        const result = await materialsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { title, link } }
+        );
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating material:", error);
+        res.status(500).json({ message: "Failed to update material" });
+      }
     });
 
     // for booked sessions which use user
