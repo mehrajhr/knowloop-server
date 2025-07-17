@@ -348,6 +348,31 @@ async function run() {
       }
     });
 
+    // for admin materials
+    app.get("/admin/materials", async (req, res) => {
+      try {
+        const materials = await materialsCollection
+          .find()
+          .sort({ uploadedAt: -1 })
+          .toArray();
+        res.send(materials);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch materials" });
+      }
+    });
+
+    app.delete("/admin/materials/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await materialsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to delete material" });
+      }
+    });
+
     // for booked sessions which use user
 
     // create booked session
