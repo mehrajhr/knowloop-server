@@ -238,10 +238,31 @@ async function run() {
 
     // for materials
 
+    app.get("/student/materials", async (req, res) => {
+      try {
+        const { email } = req.query;
+
+        const bookedSessions = await bookedSessionsCollection
+          .find({ studentEmail: email })
+          .toArray();
+        const sessionIds = bookedSessions.map((session) => session.sessionId);
+
+        const materials = await materialsCollection
+          .find({ sessionId: { $in: sessionIds } })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(materials);
+      } catch (error) {
+        console.error("Error fetching materials:", error);
+        res.status(500).send({ message: "Failed to load materials" });
+      }
+    });
+
     app.get("/materials", async (req, res) => {
       const { tutor_email } = req.query;
       try {
-        const query = tutor_email ? {tutorEmail: tutor_email } : {};
+        const query = tutor_email ? { tutorEmail: tutor_email } : {};
         const materials = await materialsCollection
           .find(query)
           .sort({ createdAt: -1 })
