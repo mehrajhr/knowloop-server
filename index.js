@@ -80,13 +80,24 @@ async function run() {
 
     // get all sessions which approved by admin
     app.get("/sessions", async (req, res) => {
+      const status = req.query.status;
+      const query = { status: status ? status : "approved" };
       try {
-        const sessions = await sessionsCollection
-          .find({ status: "approved" })
-          .sort({ registrationStartDate: 1 }) // optional: sort by date ascending
-          .toArray();
+        if (status === "all") {
+          const sessions = await sessionsCollection
+            .find()
+            .sort({ registrationStartDate: 1 })
+            .toArray();
 
-        res.send(sessions);
+          res.send(sessions);
+        } else {
+          const sessions = await sessionsCollection
+            .find(query)
+            .sort({ registrationStartDate: 1 }) // optional: sort by date ascending
+            .toArray();
+
+          res.send(sessions);
+        }
       } catch (error) {
         console.error("Error fetching sessions:", error);
         res.status(500).json({ message: "Failed to fetch study sessions" });
@@ -117,6 +128,79 @@ async function run() {
         res.status(500).json({ message: "Failed to fetch session" });
       }
     });
+
+    // post or create session by teacher
+    app.post("/study-sessions", async (req, res) => {
+      try {
+        const session = req.body;
+
+        // Ensure fee and status have default values
+        session.fee = session.fee || "0";
+        session.status = "pending";
+        session.reviews = [];
+        session.averageRating = 0;
+
+        const result = await sessionsCollection.insertOne(session);
+        res.send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Error creating session:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to create session" });
+      }
+    });
+
+    // use by admin for sessions
+
+    // sessions delete by admin
+    app.delete("/sessions/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await sessionsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    // update price by admin 
+    app.patch("/sessions/:id", async (req, res) => {
+      const id = req.params.id;
+      const { price } = req.body;
+
+      try {
+        const result = await sessionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { fee: price } }
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error("Failed to update session price:", error);
+        res.status(500).json({ message: "Update failed" });
+      }
+    });
+
+    // set fees by admin
+    app.patch("/sessions/approve/:id", async (req, res) => {
+      const { id } = req.params;
+      const { fee, status } = req.body;
+      const result = await sessionsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { fee, status } }
+      );
+      res.send({ success: result.modifiedCount > 0 });
+    });
+
+    // Reject session by admin
+    app.patch("/sessions/reject/:id", async (req, res) => {
+      const { id } = req.params;
+      const result = await sessionsCollection.deleteOne({
+        _id: new ObjectId(id),
+        status: "pending",
+      });
+      res.send({ success: result.deletedCount > 0 });
+    });
+
+    // for booked sessions which use user
 
     // create booked session
     app.post("/booked-sessions", async (req, res) => {
