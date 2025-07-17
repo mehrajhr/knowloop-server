@@ -78,31 +78,38 @@ async function run() {
 
     // for sessions
 
-    // get all sessions which approved by admin
+    // get all sessions
     app.get("/sessions", async (req, res) => {
-      const status = req.query.status;
-      const query = { status: status ? status : "approved" };
+      const { status, email } = req.query;
+      const query = {};
+
+      if (email) {
+        query.tutor_email = email;
+      } else if (status && status !== "all") {
+        query.status = status;
+      }
+
       try {
+        let sessions;
         if (status === "all") {
-          const sessions = await sessionsCollection
+          sessions = await sessionsCollection
             .find()
             .sort({ registrationStartDate: 1 })
             .toArray();
-
-          res.send(sessions);
         } else {
-          const sessions = await sessionsCollection
+          sessions = await sessionsCollection
             .find(query)
-            .sort({ registrationStartDate: 1 }) // optional: sort by date ascending
+            .sort({ registrationStartDate: 1 })
             .toArray();
-
-          res.send(sessions);
         }
+
+        res.send(sessions);
       } catch (error) {
         console.error("Error fetching sessions:", error);
         res.status(500).json({ message: "Failed to fetch study sessions" });
       }
     });
+
 
     // get session by id for details
     app.get("/sessions/:id", async (req, res) => {
@@ -129,6 +136,8 @@ async function run() {
       }
     });
 
+    // for teacher
+
     // post or create session by teacher
     app.post("/study-sessions", async (req, res) => {
       try {
@@ -150,6 +159,30 @@ async function run() {
       }
     });
 
+    // resend request rejected sessions to admin for approved
+    app.patch("/sessions/resend/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await sessionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "pending" } }
+        );
+
+        if (result.modifiedCount > 0) {
+          res
+            .status(200)
+            .json({ message: "Approval request resent successfully." });
+        } else {
+          res
+            .status(404)
+            .json({ message: "Session not found or already pending." });
+        }
+      } catch (error) {
+        console.error("Error resending approval:", error);
+        res.status(500).json({ message: "Failed to resend approval request" });
+      }
+    });
+
     // use by admin for sessions
 
     // sessions delete by admin
@@ -161,7 +194,7 @@ async function run() {
       res.send(result);
     });
 
-    // update price by admin 
+    // update price by admin
     app.patch("/sessions/:id", async (req, res) => {
       const id = req.params.id;
       const { price } = req.body;
@@ -193,11 +226,13 @@ async function run() {
     // Reject session by admin
     app.patch("/sessions/reject/:id", async (req, res) => {
       const { id } = req.params;
-      const result = await sessionsCollection.deleteOne({
-        _id: new ObjectId(id),
-        status: "pending",
-      });
-      res.send({ success: result.deletedCount > 0 });
+      const result = await sessionsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+        },
+        { $set: { status: "rejected" } }
+      );
+      res.send({ success: result.modifiedCount > 0 });
     });
 
     // for booked sessions which use user
