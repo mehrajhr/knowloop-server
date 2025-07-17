@@ -45,6 +45,39 @@ async function run() {
       }
     });
 
+    app.get("/admin/users", async (req, res) => {
+      try {
+        const search = req.query.search || "";
+        const query = {
+          $or: [
+            { name: { $regex: search, $options: "i" } },
+            { email: { $regex: search, $options: "i" } },
+          ],
+        };
+
+        const users = await usersCollection.find(query).toArray();
+        res.send(users);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch users" });
+      }
+    });
+
+    app.patch("/admin/users/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { role } = req.body;
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to update role" });
+      }
+    });
+
     // create user
     app.post("/users", async (req, res) => {
       try {
@@ -238,6 +271,7 @@ async function run() {
 
     // for materials
 
+    // for students
     app.get("/student/materials", async (req, res) => {
       try {
         const { email } = req.query;
