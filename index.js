@@ -2,10 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { MongoClient, ObjectId } = require("mongodb");
-
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(cors());
@@ -25,6 +25,7 @@ async function run() {
     const bookedSessionsCollection = db.collection("bookedSessions");
     const notesCollection = db.collection("notes");
     const materialsCollection = db.collection("materials");
+    const transactionsCollection = db.collection("transaction");
 
     // for useres
 
@@ -42,6 +43,17 @@ async function run() {
       } catch (error) {
         console.error("Error fetching user:", error);
         res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // get all tutor
+    // GET /users/role/tutor
+    app.get("/users/role/tutor", async (req, res) => {
+      try {
+        const tutors = await usersCollection.find({ role: "tutor" }).toArray();
+        res.send(tutors);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch tutors" });
       }
     });
 
@@ -107,6 +119,72 @@ async function run() {
       } catch (error) {
         console.error("Error saving user:", error);
         return res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // get user role
+    app.get("/role/users", async (req, res) => {
+      const email = req.query.email;
+      const user = await usersCollection.findOne({ email });
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      res.send({ role: user.role });
+    });
+
+    // payment related apis
+
+    app.post("/create-payment-intent", async (req, res) => {
+      const { amount } = req.body;
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount * 100, // amount in cents
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    app.post("/transactions", async (req, res) => {
+      try {
+        const transaction = req.body;
+
+        const result = await transactionsCollection.insertOne(transaction);
+        res.send({
+          success: result.insertedId ? true : false,
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    app.patch("/sessions/payment/:id", async (req, res) => {
+      const { id } = req.params;
+      const { payment_status } = req.body;
+
+      try {
+        const result = await bookedSessionsCollection.updateOne(
+          { sessionId: id },
+          {
+            $set: {
+              paymentStatus: payment_status || "paid",
+            },
+          }
+        );
+
+        res.send({ success: result.modifiedCount > 0 });
+      } catch (error) {
+        res.status(500).send({ error: error.message });
       }
     });
 
@@ -257,15 +335,22 @@ async function run() {
       res.send({ success: result.modifiedCount > 0 });
     });
 
-    // Reject session by admin
+    // Reject session by admin with reason and feedback
     app.patch("/sessions/reject/:id", async (req, res) => {
       const { id } = req.params;
+      const { reason, feedback } = req.body;
+
       const result = await sessionsCollection.updateOne(
+        { _id: new ObjectId(id) },
         {
-          _id: new ObjectId(id),
-        },
-        { $set: { status: "rejected" } }
+          $set: {
+            status: "rejected",
+            rejectionReason: reason,
+            rejectionFeedback: feedback,
+          },
+        }
       );
+
       res.send({ success: result.modifiedCount > 0 });
     });
 
