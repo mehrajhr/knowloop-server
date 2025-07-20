@@ -6,10 +6,20 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const admin = require("firebase-admin");
+const serviceAccountBuffer = Buffer.from(
+  process.env.FIREBASE_SERVICE_ACCOUNT,
+  "base64"
+);
+const serviceAccount = JSON.parse(serviceAccountBuffer.toString("utf8"));
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 // DB
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.a0ni9sf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -27,12 +37,68 @@ async function run() {
     const materialsCollection = db.collection("materials");
     const transactionsCollection = db.collection("transaction");
 
+    // verify
+
+    const verifyFBToken = async (req, res, next) => {
+      // console.log('from middleware ', req.headers.authorization);
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
+
+      const token = authHeader.split(" ")[1];
+      if (!token) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
+
+      // verify the token
+
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+    };
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    const verifyTutor = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+      if (!user || user.role !== "tutor") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    const verifyEmail = async (req, res, next) => {
+      if (req.decoded.email !== req.query.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
     // for useres
 
     // get user
-    app.get("/users/:email", async (req, res) => {
+    app.get("/users/:email", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
+        if (req.decoded.email !== email) {
+          return res.status(403).send({ message: "forbidden access" });
+        }
+
         const user = await usersCollection.findOne({ email });
 
         if (!user) {
@@ -57,7 +123,7 @@ async function run() {
       }
     });
 
-    app.get("/admin/users", async (req, res) => {
+    app.get("/admin/users", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
         const search = req.query.search || "";
         const query = {
@@ -74,21 +140,26 @@ async function run() {
       }
     });
 
-    app.patch("/admin/users/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { role } = req.body;
+    app.patch(
+      "/admin/users/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const { role } = req.body;
 
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role } }
-        );
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { role } }
+          );
 
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Failed to update role" });
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: "Failed to update role" });
+        }
       }
-    });
+    );
 
     // create user
     app.post("/users", async (req, res) => {
@@ -123,7 +194,7 @@ async function run() {
     });
 
     // get user role
-    app.get("/role/users", async (req, res) => {
+    app.get("/role/users", verifyFBToken, verifyEmail, async (req, res) => {
       const email = req.query.email;
       const user = await usersCollection.findOne({ email });
 
@@ -136,7 +207,25 @@ async function run() {
 
     // payment related apis
 
-    app.post("/create-payment-intent", async (req, res) => {
+    // GET: /transactions?email=student@example.com
+    app.get("/transactions", verifyFBToken, verifyEmail, async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).send({ message: "Missing student email" });
+      }
+
+      try {
+        const transactions = await transactionsCollection
+          .find({ studentEmail: email })
+          .sort({ date: -1 }) // latest first
+          .toArray();
+        res.send(transactions);
+      } catch (error) {
+        res.status(500).send({ message: "Server error", error });
+      }
+    });
+
+    app.post("/create-payment-intent", verifyFBToken, async (req, res) => {
       const { amount } = req.body;
 
       try {
@@ -154,7 +243,7 @@ async function run() {
       }
     });
 
-    app.post("/transactions", async (req, res) => {
+    app.post("/transactions", verifyFBToken, async (req, res) => {
       try {
         const transaction = req.body;
 
@@ -168,7 +257,7 @@ async function run() {
       }
     });
 
-    app.patch("/sessions/payment/:id", async (req, res) => {
+    app.patch("/sessions/payment/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
       const { payment_status } = req.body;
 
@@ -200,13 +289,15 @@ async function run() {
       }
       if (status && status !== "all") {
         query.status = status;
+      } else if (!status) {
+        query.status = "approved";
       }
 
       try {
         let sessions;
         if (status === "all") {
           sessions = await sessionsCollection
-            .find()
+            .find(query)
             .sort({ registrationStartDate: 1 })
             .toArray();
         } else {
@@ -251,60 +342,77 @@ async function run() {
     // for teacher
 
     // post or create session by teacher
-    app.post("/study-sessions", async (req, res) => {
-      try {
-        const session = req.body;
+    app.post(
+      "/study-sessions",
+      verifyFBToken,
+      verifyTutor,
+      async (req, res) => {
+        try {
+          const session = req.body;
 
-        // Ensure fee and status have default values
-        session.fee = session.fee || "0";
-        session.status = "pending";
-        session.reviews = [];
-        session.averageRating = 0;
+          // Ensure fee and status have default values
+          session.fee = session.fee || "0";
+          session.status = "pending";
+          session.reviews = [];
+          session.averageRating = 0;
 
-        const result = await sessionsCollection.insertOne(session);
-        res.send({ success: true, insertedId: result.insertedId });
-      } catch (error) {
-        console.error("Error creating session:", error);
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to create session" });
+          const result = await sessionsCollection.insertOne(session);
+          res.send({ success: true, insertedId: result.insertedId });
+        } catch (error) {
+          console.error("Error creating session:", error);
+          res
+            .status(500)
+            .send({ success: false, message: "Failed to create session" });
+        }
       }
-    });
+    );
 
     // resend request rejected sessions to admin for approved
-    app.patch("/sessions/resend/:id", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const result = await sessionsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status: "pending" } }
-        );
+    app.patch(
+      "/sessions/resend/:id",
+      verifyFBToken,
+      verifyTutor,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const result = await sessionsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { status: "pending" } }
+          );
 
-        if (result.modifiedCount > 0) {
+          if (result.modifiedCount > 0) {
+            res
+              .status(200)
+              .json({ message: "Approval request resent successfully." });
+          } else {
+            res
+              .status(404)
+              .json({ message: "Session not found or already pending." });
+          }
+        } catch (error) {
+          console.error("Error resending approval:", error);
           res
-            .status(200)
-            .json({ message: "Approval request resent successfully." });
-        } else {
-          res
-            .status(404)
-            .json({ message: "Session not found or already pending." });
+            .status(500)
+            .json({ message: "Failed to resend approval request" });
         }
-      } catch (error) {
-        console.error("Error resending approval:", error);
-        res.status(500).json({ message: "Failed to resend approval request" });
       }
-    });
+    );
 
     // use by admin for sessions
 
     // sessions delete by admin
-    app.delete("/sessions/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await sessionsCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
-      res.send(result);
-    });
+    app.delete(
+      "/sessions/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const result = await sessionsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      }
+    );
 
     // update price by admin
     app.patch("/sessions/:id", async (req, res) => {
@@ -325,63 +433,78 @@ async function run() {
     });
 
     // set fees by admin
-    app.patch("/sessions/approve/:id", async (req, res) => {
-      const { id } = req.params;
-      const { fee, status } = req.body;
-      const result = await sessionsCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { fee, status } }
-      );
-      res.send({ success: result.modifiedCount > 0 });
-    });
+    app.patch(
+      "/sessions/approve/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { fee, status } = req.body;
+        const result = await sessionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { fee, status } }
+        );
+        res.send({ success: result.modifiedCount > 0 });
+      }
+    );
 
     // Reject session by admin with reason and feedback
-    app.patch("/sessions/reject/:id", async (req, res) => {
-      const { id } = req.params;
-      const { reason, feedback } = req.body;
+    app.patch(
+      "/sessions/reject/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { reason, feedback } = req.body;
 
-      const result = await sessionsCollection.updateOne(
-        { _id: new ObjectId(id) },
-        {
-          $set: {
-            status: "rejected",
-            rejectionReason: reason,
-            rejectionFeedback: feedback,
-          },
-        }
-      );
+        const result = await sessionsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: "rejected",
+              rejectionReason: reason,
+              rejectionFeedback: feedback,
+            },
+          }
+        );
 
-      res.send({ success: result.modifiedCount > 0 });
-    });
+        res.send({ success: result.modifiedCount > 0 });
+      }
+    );
 
     // for materials
 
     // for students
-    app.get("/student/materials", async (req, res) => {
-      try {
-        const { email } = req.query;
+    app.get(
+      "/student/materials",
+      verifyFBToken,
+      verifyEmail,
+      async (req, res) => {
+        try {
+          const { email } = req.query;
 
-        const bookedSessions = await bookedSessionsCollection
-          .find({ studentEmail: email })
-          .toArray();
-        const sessionIds = bookedSessions.map((session) => session.sessionId);
+          const bookedSessions = await bookedSessionsCollection
+            .find({ studentEmail: email })
+            .toArray();
+          const sessionIds = bookedSessions.map((session) => session.sessionId);
 
-        const materials = await materialsCollection
-          .find({ sessionId: { $in: sessionIds } })
-          .sort({ createdAt: -1 })
-          .toArray();
+          const materials = await materialsCollection
+            .find({ sessionId: { $in: sessionIds } })
+            .sort({ createdAt: -1 })
+            .toArray();
 
-        res.send(materials);
-      } catch (error) {
-        console.error("Error fetching materials:", error);
-        res.status(500).send({ message: "Failed to load materials" });
+          res.send(materials);
+        } catch (error) {
+          console.error("Error fetching materials:", error);
+          res.status(500).send({ message: "Failed to load materials" });
+        }
       }
-    });
+    );
 
-    app.get("/materials", async (req, res) => {
-      const { tutor_email } = req.query;
+    app.get("/materials", verifyFBToken, verifyTutor , async (req, res) => {
+      const { email } = req.query;
       try {
-        const query = tutor_email ? { tutorEmail: tutor_email } : {};
+        const query = { tutorEmail: email };
         const materials = await materialsCollection
           .find(query)
           .sort({ createdAt: -1 })
@@ -393,7 +516,7 @@ async function run() {
       }
     });
 
-    app.post("/materials", async (req, res) => {
+    app.post("/materials", verifyFBToken, verifyTutor, async (req, res) => {
       try {
         const material = req.body;
         const result = await materialsCollection.insertOne(material);
@@ -404,64 +527,84 @@ async function run() {
     });
 
     // delete materilas
-    app.delete("/materials/:id", async (req, res) => {
-      const id = req.params.id;
-      try {
-        const result = await materialsCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      } catch (error) {
-        console.error("Error deleting material:", error);
-        res.status(500).json({ message: "Failed to delete material" });
+    app.delete(
+      "/materials/:id",
+      verifyFBToken,
+      verifyTutor,
+      async (req, res) => {
+        const id = req.params.id;
+        try {
+          const result = await materialsCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          res.send(result);
+        } catch (error) {
+          console.error("Error deleting material:", error);
+          res.status(500).json({ message: "Failed to delete material" });
+        }
       }
-    });
+    );
 
     // update materials
-    app.patch("/materials/:id", async (req, res) => {
-      const id = req.params.id;
-      const { title, link } = req.body;
-      try {
-        const result = await materialsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { title, link } }
-        );
-        res.send(result);
-      } catch (error) {
-        console.error("Error updating material:", error);
-        res.status(500).json({ message: "Failed to update material" });
+    app.patch(
+      "/materials/:id",
+      verifyFBToken,
+      verifyTutor,
+      async (req, res) => {
+        const id = req.params.id;
+        const { title, link } = req.body;
+        try {
+          const result = await materialsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { title, link } }
+          );
+          res.send(result);
+        } catch (error) {
+          console.error("Error updating material:", error);
+          res.status(500).json({ message: "Failed to update material" });
+        }
       }
-    });
+    );
 
     // for admin materials
-    app.get("/admin/materials", async (req, res) => {
-      try {
-        const materials = await materialsCollection
-          .find()
-          .sort({ uploadedAt: -1 })
-          .toArray();
-        res.send(materials);
-      } catch (error) {
-        res.status(500).send({ message: "Failed to fetch materials" });
+    app.get(
+      "/admin/materials",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const materials = await materialsCollection
+            .find()
+            .sort({ uploadedAt: -1 })
+            .toArray();
+          res.send(materials);
+        } catch (error) {
+          res.status(500).send({ message: "Failed to fetch materials" });
+        }
       }
-    });
+    );
 
-    app.delete("/admin/materials/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const result = await materialsCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Failed to delete material" });
+    app.delete(
+      "/admin/materials/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const result = await materialsCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: "Failed to delete material" });
+        }
       }
-    });
+    );
 
     // for booked sessions which use user
 
     // create booked session
-    app.post("/booked-sessions", async (req, res) => {
+    app.post("/booked-sessions", verifyFBToken, async (req, res) => {
       try {
         const bookedData = req.body;
 
@@ -476,9 +619,12 @@ async function run() {
     });
 
     // get users booked session via email
-    app.get("/booked-sessions/user/:email", async (req, res) => {
+    app.get("/booked-sessions/user/:email", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
+        if (email !== req.decoded.email) {
+          res.send(403).status({ message: "forbidden access" });
+        }
         const query = { studentEmail: email };
         const result = await bookedSessionsCollection.find(query).toArray();
         res.send(result);
@@ -489,62 +635,72 @@ async function run() {
     });
 
     // check the user booked in specific session
-    app.get("/booked-sessions/check", async (req, res) => {
-      try {
-        const { email, sessionId } = req.query;
+    app.get(
+      "/booked-sessions/check",
+      verifyFBToken,
+      verifyEmail,
+      async (req, res) => {
+        try {
+          const { email, sessionId } = req.query;
 
-        if (!email || !sessionId) {
-          return res
-            .status(400)
-            .json({ message: "Missing email or session ID" });
+          if (!email || !sessionId) {
+            return res
+              .status(400)
+              .json({ message: "Missing email or session ID" });
+          }
+
+          const alreadyBooked = await bookedSessionsCollection.findOne({
+            sessionId,
+            studentEmail: email,
+          });
+
+          res.send({ booked: !!alreadyBooked, ...alreadyBooked });
+        } catch (error) {
+          console.error("Booking check failed:", error);
+          res.status(500).json({ message: "Server error" });
         }
-
-        const alreadyBooked = await bookedSessionsCollection.findOne({
-          sessionId,
-          studentEmail: email,
-        });
-
-        res.send({ booked: !!alreadyBooked, ...alreadyBooked });
-      } catch (error) {
-        console.error("Booking check failed:", error);
-        res.status(500).json({ message: "Server error" });
       }
-    });
+    );
 
     // if the user cancel booking then delete the data from this
-    app.delete("/booked-sessions", async (req, res) => {
-      try {
-        const { email, sessionId } = req.query;
+    app.delete(
+      "/booked-sessions",
+      verifyFBToken,
+      verifyEmail,
+      async (req, res) => {
+        try {
+          const { email, sessionId } = req.query;
 
-        if (!email || !sessionId) {
-          return res
-            .status(400)
-            .json({ message: "Missing email or session ID" });
-        }
+          if (!email || !sessionId) {
+            return res
+              .status(400)
+              .json({ message: "Missing email or session ID" });
+          }
 
-        const result = await bookedSessionsCollection.deleteOne({
-          sessionId,
-          studentEmail: email,
-          paymentStatus: { $ne: "paid" },
-        });
-
-        if (result.deletedCount > 0) {
-          res.send({ success: true, message: "Booking canceled" });
-        } else {
-          res.send({
-            success: false,
-            message: "No unpaid booking found to cancel",
+          const result = await bookedSessionsCollection.deleteOne({
+            sessionId,
+            studentEmail: email,
+            paymentStatus: { $ne: "paid" },
           });
+
+          if (result.deletedCount > 0) {
+            res.send({ success: true, message: "Booking canceled" });
+          } else {
+            res.send({
+              success: false,
+              message: "No unpaid booking found to cancel",
+            });
+          }
+        } catch (error) {
+          console.error("Error canceling booking:", error);
+          res.status(500).json({ message: "Server error" });
         }
-      } catch (error) {
-        console.error("Error canceling booking:", error);
-        res.status(500).json({ message: "Server error" });
       }
-    });
+    );
 
     // ✅ POST /sessions/review/:id (Add review & update rating)
 
-    app.post("/sessions/review/:id", async (req, res) => {
+    app.post("/sessions/review/:id", verifyFBToken, async (req, res) => {
       const sessionId = req.params.id;
       const { studentName, reviewText, rating } = req.body;
 
@@ -602,10 +758,13 @@ async function run() {
 
     // get users notes
 
-    app.get("/notes/:email", async (req, res) => {
+    app.get("/notes/:email", verifyFBToken, async (req, res) => {
       try {
         const email = req.params.email;
         if (!email) return res.status(400).send({ error: "Email is required" });
+        if (email !== req.decoded.email) {
+          res.send(403).status({ message: "forbidden access" });
+        }
 
         const notes = await notesCollection.find({ email }).toArray();
         res.send(notes);
