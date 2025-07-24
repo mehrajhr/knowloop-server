@@ -1,17 +1,14 @@
+const dotenv = require("dotenv");
+dotenv.config();
 const express = require("express");
 const cors = require("cors");
-const dotenv = require("dotenv");
-const { MongoClient, ObjectId } = require("mongodb");
-dotenv.config();
 const app = express();
-const port = process.env.PORT || 5000;
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const admin = require("firebase-admin");
-const serviceAccountBuffer = Buffer.from(
-  process.env.FIREBASE_SERVICE_ACCOUNT,
-  "base64"
-);
-const serviceAccount = JSON.parse(serviceAccountBuffer.toString("utf8"));
+const decoded = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, "base64");
+const serviceAccount = JSON.parse(decoded.toString("utf8"));
+const port = process.env.PORT || 5000;
+const { MongoClient, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(cors());
@@ -27,7 +24,7 @@ const client = new MongoClient(uri);
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("knowloop");
     const usersCollection = db.collection("users");
@@ -259,11 +256,11 @@ async function run() {
 
     app.patch("/sessions/payment/:id", verifyFBToken, async (req, res) => {
       const { id } = req.params;
-      const { payment_status } = req.body;
+      const { payment_status, studentEmail } = req.body;
 
       try {
         const result = await bookedSessionsCollection.updateOne(
-          { sessionId: id },
+          { sessionId: id, studentEmail },
           {
             $set: {
               paymentStatus: payment_status || "paid",
@@ -483,13 +480,33 @@ async function run() {
         try {
           const { email } = req.query;
 
+          // Step 1: Get all booked sessions for the student
           const bookedSessions = await bookedSessionsCollection
             .find({ studentEmail: email })
             .toArray();
-          const sessionIds = bookedSessions.map((session) => session.sessionId);
 
+          const validSessionIds = [];
+
+          // Step 2: Check each session's payment status and actual session fee
+          for (const booking of bookedSessions) {
+            const session = await sessionsCollection.findOne({
+              _id: new ObjectId(booking.sessionId),
+            });
+
+            if (session) {
+              const isFree = session.fee === 'Free';
+              const isPaidAndPaymentDone =
+                session.fee !== 'Free' && booking.paymentStatus === "paid";
+
+              if (isFree || isPaidAndPaymentDone) {
+                validSessionIds.push(booking.sessionId);
+              }
+            }
+          }
+
+          // Step 3: Get materials for valid sessions
           const materials = await materialsCollection
-            .find({ sessionId: { $in: sessionIds } })
+            .find({ sessionId: { $in: validSessionIds } })
             .sort({ createdAt: -1 })
             .toArray();
 
@@ -501,7 +518,7 @@ async function run() {
       }
     );
 
-    app.get("/materials", verifyFBToken, verifyTutor , async (req, res) => {
+    app.get("/materials", verifyFBToken, verifyTutor, async (req, res) => {
       const { email } = req.query;
       try {
         const query = { tutorEmail: email };
@@ -680,7 +697,6 @@ async function run() {
           const result = await bookedSessionsCollection.deleteOne({
             sessionId,
             studentEmail: email,
-            paymentStatus: { $ne: "paid" },
           });
 
           if (result.deletedCount > 0) {
@@ -838,10 +854,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } catch (error) {
     console.error(error);
   }
