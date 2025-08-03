@@ -1,4 +1,5 @@
 Knowloop Server – Collaborative Study Platform (Backend)
+
 This is the server-side codebase for Knowloop, a collaborative study platform that connects students and tutors for seamless session management, resource sharing, and secure payments.
 
 🚀 Features
