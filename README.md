@@ -21,11 +21,11 @@ This is the server-side codebase for Knowloop, a collaborative study platform th
 
 🛠️ Tech Stack
 Node.js, Express.js
-
 MongoDB, Mongoose
-
 Stripe API
-
 JSON Web Tokens (JWT)
-
 CORS, Dotenv
+
+🔗 Related Links
+KnowLoop client repo : https://github.com/mehrajhr/knowloop-client
+Live Website: https://know-loop.web.app/
