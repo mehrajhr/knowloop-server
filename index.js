@@ -109,6 +109,25 @@ async function run() {
       }
     });
 
+    // update user profile (name, photo)
+    app.put("/users-update/:email", verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+
+      if (req.decoded.email !== req.params.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      const { name, photo } = req.body;
+
+      const filter = { email };
+      const updateDoc = {
+        $set: { name, photo },
+      };
+
+      const result = await usersCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
     // get all tutor
     // GET /users/role/tutor
     app.get("/users/role/tutor", async (req, res) => {
@@ -494,9 +513,9 @@ async function run() {
             });
 
             if (session) {
-              const isFree = session.fee === 'Free';
+              const isFree = session.fee === "Free";
               const isPaidAndPaymentDone =
-                session.fee !== 'Free' && booking.paymentStatus === "paid";
+                session.fee !== "Free" && booking.paymentStatus === "paid";
 
               if (isFree || isPaidAndPaymentDone) {
                 validSessionIds.push(booking.sessionId);
