@@ -30,4 +30,4 @@ CORS, Dotenv
 
 KnowLoop client repo: https://github.com/mehrajhr/knowloop-client
 
-Live Website: https://know-loop.web.app/
+Server live link: https://know-loop-server.vercel.app/
